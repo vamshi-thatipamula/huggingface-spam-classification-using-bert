@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inside a Spam-Detecting BERT</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one centered column; a step rail on top, one step panel below, credits at the foot. */
+:root{
+  --bg:#F4F5FA; --surface:#FFFFFF; --surface-2:#ECEEF6; --ink:#171A2B; --muted:#5A5F78; --line:#D9DCEA;
+  --accent:#4B47D6; --accent-soft:#E6E5FB; --spam:#C93B3B; --spam-soft:#FBE7E5; --ham:#1D7F55; --ham-soft:#E1F3EA;
+  --amber:#B57A0B; --sky:#2273B5;
+  --f-display:"Bricolage Grotesque","Inter",system-ui,sans-serif;
+  --f-body:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0E1020; --surface:#171A2E; --surface-2:#20243C; --ink:#E9EAF4; --muted:#A0A5C0; --line:#2C3150;
+  --accent:#9A97FF; --accent-soft:#2A2A55; --spam:#FF7D73; --spam-soft:#3A1F25; --ham:#52C892; --ham-soft:#173326;
+  --amber:#F0B848; --sky:#6DB9F2; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0E1020; --surface:#171A2E; --surface-2:#20243C; --ink:#E9EAF4; --muted:#A0A5C0; --line:#2C3150;
+  --accent:#9A97FF; --accent-soft:#2A2A55; --spam:#FF7D73; --spam-soft:#3A1F25; --ham:#52C892; --ham-soft:#173326;
+  --amber:#F0B848; --sky:#6DB9F2; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:16px/1.6 var(--f-body);margin:0}
+.wrap{max-width:940px;margin:0 auto;padding-block:32px 48px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:24px}
+h1,h2,h3{font-family:var(--f-display);text-wrap:balance;margin:0;letter-spacing:-0.01em}
+h1{font-size:clamp(28px,5vw,40px);line-height:1.1;font-weight:700}
+h2{font-size:24px;font-weight:600;line-height:1.2}
+h3{font-size:18px;font-weight:600;line-height:1.3}
+p{margin:0;max-width:68ch}
+.eyebrow{font:500 12px/1 var(--f-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.lede{color:var(--muted)}
+.rail{display:flex;gap:6px;flex-wrap:wrap}
+.rail button{font:500 13px/1 var(--f-body);padding:8px 12px;border-radius:999px;border:1px solid var(--line);background:var(--surface);color:var(--muted);cursor:pointer}
+.rail button[aria-current="step"]{background:var(--accent);border-color:var(--accent);color:var(--surface)}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:24px;display:flex;flex-direction:column;gap:18px;min-width:0}
+@media (max-width:520px){.panel{padding:18px}}
+.block{display:flex;flex-direction:column;gap:12px;padding-top:18px;border-top:1px solid var(--line);min-width:0}
+.nav{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.btn{font:500 14px/1 var(--f-body);padding:10px 16px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer}
+.btn.primary{background:var(--ink);color:var(--surface);border-color:var(--ink)}
+.btn[disabled]{opacity:.4;cursor:default}
+.count{font:500 13px var(--f-mono);color:var(--muted)}
+.bubble{align-self:flex-start;max-width:min(520px,100%);background:var(--surface-2);border-radius:18px 18px 18px 4px;padding:14px 18px;font-size:17px}
+.verdict{display:inline-flex;align-items:center;gap:10px;font:600 15px var(--f-body);padding:8px 14px;border-radius:999px}
+.verdict.spam{background:var(--spam-soft);color:var(--spam)} .verdict.ham{background:var(--ham-soft);color:var(--ham)}
+.pipe{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.pipe button{font:500 13px var(--f-mono);padding:8px 12px;border-radius:8px;border:1px dashed var(--line);background:transparent;color:var(--ink);cursor:pointer}
+.pipe span{color:var(--muted)}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer;min-width:52px;font:inherit}
+.chip .t{font:500 14px var(--f-mono)} .chip .s{font:400 11px var(--f-mono);color:var(--muted);font-variant-numeric:tabular-nums}
+.chip.special .t{color:var(--accent)}
+.chip[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft)}
+.note{background:var(--surface-2);border-radius:10px;padding:12px 14px;font-size:14px;color:var(--ink)}
+.scroll{overflow-x:auto;min-width:0}
+table{border-collapse:collapse;font-variant-numeric:tabular-nums}
+th,td{padding:7px 9px;text-align:right;border-bottom:1px solid var(--line);font:400 13px var(--f-mono)}
+th:first-child,td:first-child{text-align:left;font-family:var(--f-body);font-weight:500;white-space:nowrap}
+thead th{color:var(--muted);font-weight:500}
+.neg{color:var(--spam)}
+.row-total td{font-weight:600;background:var(--accent-soft)}
+tr.click{cursor:pointer} tr.click:hover td{background:var(--surface-2)} tr.sel td{background:var(--accent-soft)}
+.controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;flex-wrap:wrap}
+.seg button{font:500 13px var(--f-mono);padding:8px 11px;border:0;background:var(--surface);color:var(--muted);cursor:pointer;min-width:36px}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--surface)}
+.lbl{font:500 12px var(--f-mono);color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.two{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:20px;align-items:start}
+@media (max-width:760px){.two{grid-template-columns:minmax(0,1fr)}}
+svg text{font-family:var(--f-mono)}
+.tables3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+@media (max-width:640px){.tables3{grid-template-columns:minmax(0,1fr)}}
+.card{border:1px solid var(--line);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.card .k{font:500 12px var(--f-mono);color:var(--muted)}
+.card .big{font:700 22px var(--f-display);font-variant-numeric:tabular-nums}
+.formula{font:500 14px/1.7 var(--f-mono);background:var(--surface-2);padding:12px 14px;border-radius:10px;overflow-x:auto;white-space:nowrap}
+.formula.soft{white-space:normal}
+.formula b{color:var(--accent);font-weight:600}
+.qkv{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+@media (max-width:640px){.qkv{grid-template-columns:minmax(0,1fr)}}
+.qkv .card .big{font-size:18px}
+.vec{display:flex;flex-wrap:wrap;gap:4px}
+.vec span{font:400 12px var(--f-mono);padding:2px 6px;border-radius:5px;background:var(--surface-2);font-variant-numeric:tabular-nums}
+.vec span.zero{color:var(--muted);text-decoration:line-through}
+.bars{display:flex;flex-direction:column;gap:5px}
+.bar{display:grid;grid-template-columns:72px minmax(0,1fr) 56px;gap:8px;align-items:center;font:400 13px var(--f-mono)}
+.bar .track{height:10px;background:var(--surface-2);border-radius:5px;overflow:hidden}
+.bar .fill{height:100%;background:var(--accent);border-radius:5px}
+.bar .v{text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)}
+.chain{display:flex;flex-wrap:wrap;align-items:stretch;gap:8px}
+.chain .card{flex:1 1 150px}
+.chain .arrow{align-self:center;color:var(--muted);font:500 18px var(--f-mono)}
+.rows17{display:flex;flex-direction:column;gap:3px;font:400 12px var(--f-mono)}
+.rows17 div{display:grid;grid-template-columns:64px minmax(0,1fr) auto;gap:8px;align-items:center;padding:3px 8px;border-radius:6px;color:var(--muted)}
+.rows17 div i{height:8px;border-radius:4px;background:var(--surface-2)}
+.rows17 div.cls{background:var(--accent-soft);color:var(--ink);font-weight:500}
+.rows17 div.cls i{background:var(--accent)}
+.meter{height:12px;border-radius:6px;background:var(--surface-2);overflow:hidden;display:flex}
+.meter i{display:block;height:100%;background:var(--accent)}
+.contrib{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
+@media (max-width:640px){.contrib{grid-template-columns:minmax(0,1fr)}}
+.cb{display:grid;grid-template-columns:78px minmax(0,1fr) 60px;gap:8px;align-items:center;font:400 12px var(--f-mono)}
+.cb .track{height:9px;background:var(--surface-2);border-radius:5px;overflow:hidden}
+.cb .v{text-align:right;font-variant-numeric:tabular-nums}
+input[type=range]{width:100%;accent-color:var(--accent)}
+.examples{display:flex;flex-direction:column;gap:14px}
+.ex{display:flex;flex-direction:column;gap:8px}
+.probbar{height:10px;border-radius:5px;background:var(--surface-2);overflow:hidden}
+.probbar i{display:block;height:100%}
+.tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+@media (max-width:720px){.tiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.tile{border:1px solid var(--line);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:4px}
+.tile .n{font:700 26px var(--f-display);font-variant-numeric:tabular-nums}
+.tile .d{font-size:13px;color:var(--muted)}
+.cm{display:grid;grid-template-columns:auto repeat(2,minmax(0,1fr));gap:6px;max-width:460px;font-size:14px}
+.cm div{padding:12px;border-radius:8px;text-align:center}
+.cm .h{color:var(--muted);font:500 12px var(--f-mono);background:none;padding:6px}
+.cm .good{background:var(--ham-soft);color:var(--ham);font:600 20px var(--f-display)}
+.cm .bad{background:var(--spam-soft);color:var(--spam);font:600 20px var(--f-display)}
+.cm small{display:block;font:400 11px var(--f-body);opacity:.85}
+footer{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:16px;border-top:1px solid var(--line);padding-top:20px}
+@media (max-width:720px){footer{grid-template-columns:minmax(0,1fr)}}
+footer section{display:flex;flex-direction:column;gap:8px;font-size:14px;color:var(--muted)}
+footer h3{font-size:16px;color:var(--ink)}
+footer b{color:var(--ink);font-weight:500}
+footer a{color:inherit}
+.thanks{background:var(--accent-soft);color:var(--ink);border-radius:10px;padding:12px 14px}
+@media (prefers-reduced-motion:no-preference){.panel{animation:in .25s ease-out}@keyframes in{from{transform:translateY(4px)}to{transform:none}}}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header style="display:flex;flex-direction:column;gap:10px">
+    <span class="eyebrow">Hugging Face · Spam classification using BERT</span>
+    <h1>Inside a spam-detecting BERT</h1>
+    <p class="lede">One SMS message, followed step by step through a fine-tuned BERT model: from text to tokens, embeddings, attention and 12 layers, to the final spam probability. Every number on this page comes from the trained model.</p>
+  </header>
+  <nav class="rail" id="rail" aria-label="Steps"></nav>
+  <section class="panel" id="panel" aria-live="polite"><p class="lede">Loading the model's numbers…</p></section>
+  <div class="nav">
+    <button class="btn" id="prev">← Back</button>
+    <span class="count" id="count"></span>
+    <button class="btn primary" id="next">Next →</button>
+  </div>
+  <footer>
+    <section>
+      <h3>Credits</h3>
+      <div><b>Dataset:</b> SMS Spam Collection by Tiago A. Almeida and José María Gómez Hidalgo, UCI Machine Learning Repository (<a href="https://archive.ics.uci.edu/dataset/228/sms+spam+collection">source</a>, licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>)</div>
+      <div><b>Model:</b> BERT (bert-base-uncased) by Google, released under the Apache 2.0 license</div>
+      <div class="thanks">Many thanks to the creators of the SMS Spam Collection for making this dataset publicly available, and to Google for releasing BERT.</div>
+    </section>
+    <section>
+      <h3>About the numbers</h3>
+      <div>All values come from the fine-tuned model. Tables of 768 numbers show only the first 8. Numbers on this page are rounded. If you recalculate them yourself, the last digit may differ slightly.</div>
+    </section>
+  </footer>
+</div>
+
+<script>
+let D = null;
+const pct = (v, d = 1) => (v * 100).toFixed(d) + "%";
+const f = (v, d = 3) => (v < 0 ? "−" : "") + Math.abs(v).toFixed(d);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const isSpecial = t => t === "[CLS]" || t === "[SEP]";
+const st = { tok: 7, target: null, layer: 0, head: 0, embTok: 7, watch: null, explore: null, neuron: 0, cur: 0 };
+
+function chips(T, sel, multi, attr = "i") {
+  return `<div class="chips" role="group" aria-label="Tokens">${T.map((t, i) => {
+    const on = multi ? sel.has(i) : sel === i;
+    return `<button class="chip ${isSpecial(t) ? "special" : ""}" data-${attr}="${i}" aria-pressed="${on}"><span class="t">${esc(t)}</span><span class="s">${i}</span></button>`;
+  }).join("")}</div>`;
+}
+const vecHTML = (v, zeroOut) => `<div class="vec">${v.map(x => `<span class="${zeroOut && x === 0 ? "zero" : ""}">${f(x)}</span>`).join("")}<span>…</span></div>`;
+
+const steps = [
+{ name: "The message", render(T) {
+  const p = D.classifier.spam_probability, spam = p > 0.5;
+  const stages = [["Tokens", 1], ["Embeddings", 2], ["Attention", 3], ["12 layers", 4], ["Classifier", 5], ["Probability", 6]];
+  return `<span class="eyebrow">Overview</span><h2>One message, start to finish</h2>
+  <div class="bubble">${esc(D.message)}</div>
+  <div><span class="verdict ${spam ? "spam" : "ham"}">${spam ? "Spam" : "Ham"} · ${pct(p)} spam probability</span></div>
+  <p>BERT never sees letters. It turns the message into numbers, lets every word look at every other word for clues, repeats that 12 times, and boils the result down to one score. Follow the steps to see each stage with the model's real numbers.</p>
+  <div class="pipe"><button data-go="1">Text</button>${stages.map(([s, k]) => `<span>→</span><button data-go="${k}">${s}</button>`).join("")}</div>`;
+}},
+{ name: "Tokens", render(T) {
+  const dup = T.find((t, i) => !isSpecial(t) && /^[a-z]/.test(t) && T.indexOf(t) !== T.lastIndexOf(t));
+  return `<span class="eyebrow">Step 1 · Text → tokens → IDs</span><h2>${T.length} tokens</h2>
+  <p>The tokenizer lowercases the message, splits it into tokens (punctuation counts too), and looks up each token's ID in BERT's vocabulary of 30,522 tokens. It adds <b>[CLS]</b> at the start, whose final vector later summarizes the whole message, and <b>[SEP]</b> at the end.</p>
+  <div class="chips">${T.map((t, i) => `<div class="chip ${isSpecial(t) ? "special" : ""}" style="cursor:default"><span class="t">${esc(t)}</span><span class="s">ID ${D.token_ids[i]}</span><span class="s">pos ${i}</span></div>`).join("")}</div>
+  ${dup ? `<div class="note">“${esc(dup)}” appears ${T.filter(x => x === dup).length} times, always with ID ${D.token_ids[T.indexOf(dup)]}. Same word, same ID. Only its position differs, which matters in the next step.</div>` : ""}`;
+}},
+{ name: "Embeddings", render(T) {
+  const E = D.embeddings, i = st.embTok, sum = E.sum_first_8[i], m = E.mean_of_768[i], s = E.spread_of_768[i];
+  const g = E.layernorm_scale_first_8, b = E.layernorm_shift_first_8;
+  const z = sum.map(v => (v - m) / s), res = E.normalized_first_8[i];
+  const cols = [...Array(8)].map((_, k) => `<th>${k + 1}</th>`).join("");
+  const row = (name, v, cls = "") => `<tr class="${cls}"><td>${name}</td>${v.map(x => `<td class="${x < 0 ? "neg" : ""}">${f(x, 4)}</td>`).join("")}</tr>`;
+  const same = T.map((t, k) => k).filter(k => k !== i && T[k] === T[i]);
+  return `<span class="eyebrow">Step 2 · IDs → 768 numbers</span><h2>Embedding for “${esc(T[i])}”</h2>
+  <p>Each token gets three rows of 768 numbers, looked up from three tables. These are lookup tables, not the attention weights Wq, Wk and Wv (those come in the next step). Pick a token to follow its numbers.</p>
+  ${chips(T, i, false, "e")}
+  <div class="tables3">
+    <div class="card"><span class="k">Word table · 30,522 × 768</span><b>Which token?</b><span>Row for “${esc(T[i])}” (ID ${D.token_ids[i]})</span></div>
+    <div class="card"><span class="k">Position table · 512 × 768</span><b>Where does it sit?</b><span>Row for place ${i}</span></div>
+    <div class="card"><span class="k">Segment table · 2 × 768</span><b>Which sentence?</b><span>Row for sentence A</span></div>
+  </div>
+  <div class="block"><h3>1 · Add the three rows, number by number</h3>
+  <div class="formula soft">sum = <b>word</b> + <b>position</b> + <b>segment</b> &nbsp;·&nbsp; number 1: ${f(E.word_first_8[i][0], 4)} + ${f(E.position_first_8[i][0], 4)} + ${f(E.segment_first_8[i][0], 4)} = ${f(sum[0], 4)}</div>
+  <div class="scroll"><table><thead><tr><th>First 8 of 768</th>${cols}</tr></thead><tbody>
+    ${row("Word row", E.word_first_8[i])}${row("+ Position row", E.position_first_8[i])}${row("+ Segment row", E.segment_first_8[i])}${row("= Sum", sum, "row-total")}
+  </tbody></table></div></div>
+  <div class="block"><h3>2 · Normalize the sum (layer normalization)</h3>
+  <p>The sum is a list of 768 small numbers. Normalization puts every token's numbers on the same scale: centered around 0 with a spread of about 1. It uses all 768 numbers of the token to find their average (mean) and spread (standard deviation), then applies a learned scale and shift.</p>
+  <div class="tables3">
+    <div class="card"><span class="k">Mean of all 768 sum numbers</span><span class="big">${f(m, 5)}</span></div>
+    <div class="card"><span class="k">Spread (standard deviation)</span><span class="big">${f(s, 5)}</span></div>
+    <div class="card"><span class="k">Scale and shift</span><span>Learned during training, one pair for each of the 768 positions</span></div>
+  </div>
+  <div class="formula soft">result = (<b>sum</b> − mean) ÷ spread × <b>scale</b> + <b>shift</b><br>number 1: (${f(sum[0], 4)} − (${f(m, 5)})) ÷ ${f(s, 5)} × ${f(g[0], 4)} ${b[0] < 0 ? "−" : "+"} ${Math.abs(b[0]).toFixed(4)} = ${f(res[0], 4)}</div>
+  <div class="scroll"><table><thead><tr><th>First 8 of 768</th>${cols}</tr></thead><tbody>
+    ${row("Sum", sum)}${row("(sum − mean) ÷ spread", z)}${row("Scale", g)}${row("Shift", b)}${row("= Result", res, "row-total")}
+  </tbody></table></div>
+  ${same.length ? `<div class="note">“${esc(T[i])}” also sits at place ${same.join(", ")}. Pick it: the word row is identical, the position row differs, so the result differs too. That is how BERT keeps word order.</div>` : ""}</div>`;
+}},
+{ name: "Attention", render(T) {
+  const L = D.attention_layers[st.layer], W = L.weights[st.head], S = L.scores[st.head], N = T.length, a = st.tok;
+  const row = W[a], srow = S[a];
+  const tgt = st.target === null ? row.indexOf(Math.max(...row)) : st.target;
+  const q = L.q_first_8[st.head][a], k = L.k_first_8[st.head][tgt];
+  const exps = srow.map(Math.exp), esum = exps.reduce((x, y) => x + y, 0);
+  const V = L.v_first_8[st.head], out8 = [...Array(8)].map((_, c) => row.reduce((acc, w, j) => acc + w * V[j][c], 0));
+  const cs = 22, Lft = 74, Wd = Lft + N * cs, Ht = Lft + N * cs;
+  let svg = `<svg viewBox="0 0 ${Wd + 34} ${Ht + 4}" width="100%" role="img" aria-label="Attention heatmap"><title>Layer ${st.layer + 1}, head ${st.head + 1} attention weights</title>`;
+  for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+    const v = W[r][c], o = Math.min(1, Math.sqrt(v) * 1.15);
+    svg += `<rect x="${Lft + c * cs}" y="${Lft + r * cs}" width="${cs - 1.5}" height="${cs - 1.5}" rx="3" style="fill:var(--accent);fill-opacity:${o.toFixed(3)}"><title>${esc(T[r])} → ${esc(T[c])}: ${pct(v)}</title></rect>`;
+  }
+  svg += `<rect x="${Lft - 2}" y="${Lft + a * cs - 2}" width="${N * cs + 2.5}" height="${cs + 2.5}" rx="4" style="fill:none;stroke:var(--ink);stroke-width:1.5"/>`;
+  T.forEach((t, i) => {
+    svg += `<text x="${Lft - 6}" y="${Lft + i * cs + cs / 2 + 4}" text-anchor="end" font-size="11" style="fill:${i === a ? "var(--accent)" : "var(--muted)"}">${esc(t)}</text>`;
+    svg += `<text transform="translate(${Lft + i * cs + cs / 2 + 4},${Lft - 6}) rotate(-60)" font-size="11" style="fill:var(--muted)">${esc(t)}</text>`;
+  });
+  svg += `</svg>`;
+  const tbl = T.map((t, j) => `<tr class="click ${j === tgt ? "sel" : ""}" data-t="${j}"><td>${esc(t)}</td><td class="${srow[j] < 0 ? "neg" : ""}">${f(srow[j], 2)}</td><td>${pct(row[j])}</td><td style="width:40%"><div class="bar"><div class="track" style="grid-column:1/-1"><div class="fill" style="width:${(row[j] / Math.max(...row) * 100).toFixed(1)}%"></div></div></div></td></tr>`).join("");
+  return `<span class="eyebrow">Step 3 · Attention · 12 layers × 12 heads = 144</span><h2>Where “${esc(T[a])}” looks</h2>
+  <p>Attention lets each token look at the other tokens for clues. Every head turns each token into three short lists of 64 numbers, using three learned weight tables:</p>
+  <div class="qkv">
+    <div class="card"><span class="k">Query = x · Wq</span><span class="big">What am I looking for?</span><span>Like typing into a search box.</span></div>
+    <div class="card"><span class="k">Key = x · Wk</span><span class="big">What do I offer?</span><span>Like the title of a video.</span></div>
+    <div class="card"><span class="k">Value = x · Wv</span><span class="big">What do I hand over?</span><span>Like the video's content.</span></div>
+  </div>
+  <div class="formula soft">score = (<b>query</b> of “${esc(T[a])}” · <b>key</b> of each token) ÷ √64 &nbsp;→&nbsp; softmax turns the 17 scores into percentages &nbsp;→&nbsp; new vector = Σ percentage × <b>value</b></div>
+  <div class="block" style="border-top:0;padding-top:0"><h3>Where the lists of 64 come from</h3>
+  <div class="formula soft">768 numbers per token ÷ 12 heads = <b>64</b> numbers per head<br>
+  768 numbers × Wq (768 × 64) → <b>query</b>: 64 numbers<br>
+  768 numbers × Wk (768 × 64) → <b>key</b>: 64 numbers<br>
+  768 numbers × Wv (768 × 64) → <b>value</b>: 64 numbers</div>
+  <p>Each of the 64 numbers is one long sum: all 768 numbers of the token, each multiplied by its own weight, then added up. Every head has its own Wq, Wk and Wv, so each head can look for something different. At the end, the 12 heads' results of 64 numbers are joined back into 12 × 64 = 768.</p></div>
+  <div class="controls"><span class="lbl">Layer</span><div class="seg">${[...Array(12)].map((_, l) => `<button data-l="${l}" aria-pressed="${l === st.layer}">${l + 1}</button>`).join("")}</div></div>
+  <div class="controls"><span class="lbl">Head</span><div class="seg">${[...Array(12)].map((_, h) => `<button data-h="${h}" aria-pressed="${h === st.head}">${h + 1}</button>`).join("")}</div></div>
+  <span class="lbl">The token that is looking</span>
+  ${chips(T, a)}
+  <div class="two"><div class="scroll">${svg}<p class="count" style="margin-top:6px">Each row is a token looking; each column, a token being looked at. Darker = more attention. Each row adds up to 100%.</p></div>
+  <div style="display:flex;flex-direction:column;gap:8px;min-width:0"><span class="lbl">Row for “${esc(T[a])}” · click a token to see the math</span>
+  <div class="scroll"><table style="width:100%"><thead><tr><th>Token</th><th>Score</th><th>Share</th><th></th></tr></thead><tbody>${tbl}</tbody></table></div></div></div>
+  <div class="block"><h3>The math for “${esc(T[a])}” → “${esc(T[tgt])}”</h3>
+  <div class="scroll"><table><thead><tr><th>First 8 of 64</th>${[...Array(8)].map((_, c) => `<th>${c + 1}</th>`).join("")}</tr></thead><tbody>
+    <tr><td>Query of “${esc(T[a])}”</td>${q.map(x => `<td class="${x < 0 ? "neg" : ""}">${f(x, 2)}</td>`).join("")}</tr>
+    <tr><td>Key of “${esc(T[tgt])}”</td>${k.map(x => `<td class="${x < 0 ? "neg" : ""}">${f(x, 2)}</td>`).join("")}</tr>
+    <tr><td>Query × key</td>${q.map((x, c) => `<td class="${x * k[c] < 0 ? "neg" : ""}">${f(x * k[c], 2)}</td>`).join("")}</tr>
+  </tbody></table></div>
+  <div class="formula soft">1 · Multiply query and key, number by number, and add all <b>64</b> products: ${f(srow[tgt] * 8, 2)}<br>
+  2 · Divide by √64 = 8: <b>score</b> = ${f(srow[tgt], 3)}<br>
+  3 · Softmax: e<sup>${f(srow[tgt], 3)}</sup> ÷ (sum of e<sup>score</sup> over all 17 tokens) = ${Math.exp(srow[tgt]).toFixed(3)} ÷ ${esum.toFixed(3)} = <b>${pct(row[tgt])}</b></div>
+  <div class="note"><b>Why divide by √64 = 8?</b> Adding up 64 products can give big numbers (here ${f(srow[tgt] * 8, 2)}). Softmax reacts strongly to big scores: one token would get almost 100% and all others almost 0%. Dividing by 8 keeps the scores moderate, so attention can spread over several tokens.</div>
+  <p>Softmax works on the scores, not on the values. The percentages then decide how much of each token's <b>value</b> is mixed into “${esc(T[a])}”'s new vector:</p>
+  <div class="formula soft">new vector of “${esc(T[a])}” = ${T.slice(0, 3).map((t, j) => `${pct(row[j])} × value(${esc(t)})`).join(" + ")} + … (all 17 tokens)</div>
+  <div class="scroll"><table><thead><tr><th>First 8 of 64</th>${[...Array(8)].map((_, c) => `<th>${c + 1}</th>`).join("")}</tr></thead><tbody>
+    <tr><td>Value of “${esc(T[tgt])}”</td>${V[tgt].map(x => `<td class="${x < 0 ? "neg" : ""}">${f(x, 2)}</td>`).join("")}</tr>
+    <tr class="row-total"><td>New vector of “${esc(T[a])}”</td>${out8.map(x => `<td class="${x < 0 ? "neg" : ""}">${f(x, 2)}</td>`).join("")}</tr>
+  </tbody></table></div>
+  <div class="note">Each of the 12 heads does this with its own Wq, Wk and Wv, producing 64 numbers per token. The 12 heads' results are joined back into 768 numbers, and the layer's other parts (a shortcut, normalization and a small feed-forward network) prepare them for the next layer.</div></div>`;
+}},
+{ name: "12 layers", render(T) {
+  const S = D.similarity_to_start_per_layer, w = 640, h = 330, l = 64, r = 16, t = 14, b = 56;
+  const X = k => l + k * (w - l - r) / 12, Y = v => t + (1 - v) * (h - t - b);
+  const palette = ["var(--accent)", "var(--spam)", "var(--ham)", "var(--amber)", "var(--sky)", "var(--muted)"];
+  let svg = `<svg viewBox="0 0 ${w} ${h}" width="100%" role="img" aria-label="Similarity to the starting vector per layer"><title>How each token changes through 12 layers</title>`;
+  for (let v = 0; v <= 1.0001; v += 0.25) svg += `<line x1="${l}" x2="${w - r}" y1="${Y(v)}" y2="${Y(v)}" style="stroke:var(--line)"/><text x="${l - 8}" y="${Y(v) + 4}" text-anchor="end" font-size="11" style="fill:var(--muted)">${v.toFixed(2)}</text>`;
+  for (let k = 0; k <= 12; k++) svg += `<text x="${X(k)}" y="${h - 34}" text-anchor="middle" font-size="11" style="fill:var(--muted)">${k}</text>`;
+  svg += `<text x="${(l + w - r) / 2}" y="${h - 8}" text-anchor="middle" font-size="12" style="fill:var(--ink)">Layer (0 = the starting embeddings)</text>`;
+  svg += `<text transform="translate(16,${(t + h - b) / 2}) rotate(-90)" text-anchor="middle" font-size="12" style="fill:var(--ink)">Similarity to start</text>`;
+  const sel = [...st.watch];
+  sel.forEach((i, n) => {
+    const c = palette[n % palette.length];
+    svg += `<polyline points="${S[i].map((v, k) => `${X(k).toFixed(1)},${Y(v).toFixed(1)}`).join(" ")}" style="fill:none;stroke:${c};stroke-width:2.5;stroke-linejoin:round"/><circle cx="${X(12)}" cy="${Y(S[i][12])}" r="4" style="fill:${c}"/>`;
+  });
+  svg += `</svg>`;
+  const legend = sel.map((i, n) => `<span style="display:inline-flex;align-items:center;gap:6px;font:500 13px var(--f-mono)"><i style="width:14px;height:3px;border-radius:2px;background:${palette[n % palette.length]}"></i>${esc(T[i])} <span style="color:var(--muted)">${S[i][12].toFixed(3)}</span></span>`).join("");
+  const order = sel.slice().sort((x, y) => S[x][12] - S[y][12]);
+  const arrow = (deg, lab) => { const rd = deg * Math.PI / 180; return `<div style="display:flex;flex-direction:column;align-items:center;gap:4px"><svg viewBox="0 0 90 70" width="90" height="70" aria-hidden="true"><line x1="15" y1="55" x2="80" y2="55" style="stroke:var(--muted);stroke-width:3;stroke-linecap:round"/><line x1="15" y1="55" x2="${(15 + 65 * Math.cos(rd)).toFixed(1)}" y2="${(55 - 65 * Math.sin(rd)).toFixed(1)}" style="stroke:var(--accent);stroke-width:3;stroke-linecap:round"/></svg><span style="font:500 13px var(--f-mono)">${lab}</span></div>`; };
+  return `<span class="eyebrow">Step 4 · Through all 12 layers</span><h2>How much each token changes</h2>
+  <p>After every layer, each token's 768 numbers are updated with what it learned from the other tokens. The chart compares each token's numbers after every layer with its starting numbers. Pick up to 6 tokens.</p>
+  <div class="block" style="border-top:0;padding-top:0"><h3>Reading the y-axis</h3>
+  <p>Think of a token's 768 numbers as an arrow pointing in some direction. The similarity measures how much the arrow still points the same way as at the start (cosine similarity):</p>
+  <div style="display:flex;flex-wrap:wrap;gap:20px">${arrow(0, "1.0 · unchanged")}${arrow(60, "0.5 · partly changed")}${arrow(90, "0 · completely different")}</div></div>
+  ${chips(T, st.watch, true)}
+  <div class="scroll">${svg}</div>
+  <div style="display:flex;flex-wrap:wrap;gap:16px">${legend}</div>
+  ${order.length ? `<div class="note">Changed most by layer 12: <b>${esc(T[order[0]])}</b> (${S[order[0]][12].toFixed(3)}). Every token starts at 1.0 and moves lower as it takes in context from the rest of the message.</div>` : ""}`;
+}},
+{ name: "Classifier", render(T) {
+  const C = D.classifier, h = C.after_linear1_256, w2 = C.linear2_weights_256, cls = C.cls_768;
+  const j = st.neuron, wr = C.linear1_weights_first_8_neurons[j];
+  const prods = wr.map((w, i) => w * cls[i]), psum = prods.reduce((a, b) => a + b, 0), hj = psum + C.linear1_bias_first_8[j];
+  const active = h.filter(x => x > 0).length;
+  const contrib = h.map((x, k) => [Math.max(0, x) * w2[k], k]).filter(c => c[0] !== 0);
+  const posSum = contrib.filter(c => c[0] > 0).reduce((a, c) => a + c[0], 0), negSum = contrib.filter(c => c[0] < 0).reduce((a, c) => a + c[0], 0);
+  const topP = contrib.filter(c => c[0] > 0).sort((a, b) => b[0] - a[0]).slice(0, 6), topN = contrib.filter(c => c[0] < 0).sort((a, b) => a[0] - b[0]).slice(0, 6);
+  const mx = Math.max(...contrib.map(c => Math.abs(c[0])));
+  const cb = (arr, col) => arr.map(([v, k]) => `<div class="cb"><span>neuron ${k + 1}</span><div class="track"><div style="height:100%;width:${(Math.abs(v) / mx * 100).toFixed(1)}%;background:${col};border-radius:5px"></div></div><span class="v">${v > 0 ? "+" : ""}${f(v, 3)}</span></div>`).join("");
+  return `<span class="eyebrow">Step 5 · [CLS] → classifier</span><h2>From 768 numbers to one score</h2>
+  <div class="block" style="border-top:0;padding-top:0"><h3>Where the [CLS] numbers come from</h3>
+  <p>After layer 12, BERT hands back a table with one row of 768 numbers for each of the ${T.length} tokens. The classifier reads only row 0, the <b>[CLS]</b> row.</p>
+  <div class="rows17">${T.map((t, i) => `<div class="${i === 0 ? "cls" : ""}"><span>${esc(t)}</span><i></i><span>${i === 0 ? "→ classifier" : "not used"}</span></div>`).join("")}</div>
+  <div class="note"><b>Why only [CLS]?</b> [CLS] carries no word of its own, so through attention in all 12 layers it gathers information from every token in the message. During fine-tuning, the classifier only ever read this row, so training taught BERT to put its summary of the whole message there. One fixed row also works for messages of any length.</div></div>
+  <div class="block"><h3>The classifier's shape</h3>
+  <div class="chain">
+    <div class="card"><span class="k">Input</span><b>[CLS] vector</b><span>768 numbers</span></div><span class="arrow">→</span>
+    <div class="card"><span class="k">Linear 768 → 256</span><b>256 neurons</b><span>weights 256 × 768, 256 biases</span></div><span class="arrow">→</span>
+    <div class="card"><span class="k">ReLU</span><b>Negatives → 0</b><span>${active} of 256 stay active</span></div><span class="arrow">→</span>
+    <div class="card"><span class="k">Dropout 30%</span><b>Training only</b><span>Off when predicting</span></div><span class="arrow">→</span>
+    <div class="card"><span class="k">Linear 256 → 1</span><b>One score</b><span>256 weights, 1 bias</span></div>
+  </div>
+  <p class="count">Weights to learn: 768 × 256 + 256 = 196,864, and 256 + 1 = 257.</p></div>
+  <div class="block"><h3>How one neuron is calculated</h3>
+  <p>Each of the 256 neurons multiplies all 768 [CLS] numbers by its own 768 weights, adds them up, and adds its bias. Pick a neuron:</p>
+  <div class="controls"><span class="lbl">Neuron</span><div class="seg">${[...Array(8)].map((_, k) => `<button data-n="${k}" aria-pressed="${k === j}">${k + 1}</button>`).join("")}</div></div>
+  <div class="formula soft">neuron ${j + 1} = ${prods.slice(0, 3).map((p, i) => `(${f(wr[i], 3)} × ${f(cls[i], 3)})`).join(" + ")} + … 765 more products … + bias<br>
+  = ${f(psum, 3)} ${C.linear1_bias_first_8[j] < 0 ? "−" : "+"} ${Math.abs(C.linear1_bias_first_8[j]).toFixed(3)} = <b>${f(hj, 3)}</b><br>
+  ReLU: ${hj > 0 ? `${f(hj, 3)} is positive, so it stays <b>${f(hj, 3)}</b>` : `${f(hj, 3)} is negative, so it becomes <b>0</b>`}</div>
+  <p>${f(psum, 3)} is all 768 products (weight × [CLS] number) added together, and ${f(C.linear1_bias_first_8[j], 3)} is neuron ${j + 1}'s bias.</p></div>
+  <div class="block"><h3>How the score is calculated</h3>
+  <p>The last layer multiplies each of the ${active} active neurons by its own weight and adds them up, plus one bias. Positive contributions push towards spam, negative ones towards ham. The ${256 - active} neurons set to 0 by ReLU add nothing.</p>
+  <div class="contrib"><div style="display:flex;flex-direction:column;gap:6px"><span class="lbl" style="color:var(--spam)">Biggest pushes towards spam</span>${cb(topP, "var(--spam)")}</div>
+  <div style="display:flex;flex-direction:column;gap:6px"><span class="lbl" style="color:var(--ham)">Biggest pushes towards ham</span>${cb(topN, "var(--ham)")}</div></div>
+  <div class="formula soft">score = ${f(posSum, 3)} ${negSum < 0 ? "−" : "+"} ${Math.abs(negSum).toFixed(3)} ${C.linear2_bias < 0 ? "−" : "+"} ${Math.abs(C.linear2_bias).toFixed(3)} = <b>${f(posSum + negSum + C.linear2_bias, 3)}</b></div>
+  <p>${f(posSum, 3)} is all the pushes to spam added together (${contrib.filter(c => c[0] > 0).length} neurons), ${f(negSum, 3)} is all the pushes to ham added together (${contrib.filter(c => c[0] < 0).length} neurons), and ${f(C.linear2_bias, 3)} is the bias.</p>
+  <div class="note">The model's own score is ${f(C.final_score, 4)}. Next, the sigmoid turns it into a probability.</div></div>`;
+}},
+{ name: "Probability", render(T) {
+  const sig = z => 1 / (1 + Math.exp(-z)), w = 640, h = 240, l = 44, r = 16, t = 14, b = 34;
+  const X = z => l + (z + 6) / 12 * (w - l - r), Y = p => t + (1 - p) * (h - t - b);
+  let path = ""; for (let z = -6; z <= 6.001; z += 0.1) path += `${path ? "L" : "M"}${X(z).toFixed(1)},${Y(sig(z)).toFixed(1)}`;
+  const real = D.classifier.final_score, p = sig(st.explore), spam = p > 0.5;
+  let svg = `<svg viewBox="0 0 ${w} ${h}" width="100%" role="img" aria-label="Sigmoid curve"><title>Sigmoid: score to probability</title>`;
+  [0, 0.5, 1].forEach(v => svg += `<line x1="${l}" x2="${w - r}" y1="${Y(v)}" y2="${Y(v)}" style="stroke:var(--line)"/><text x="${l - 8}" y="${Y(v) + 4}" text-anchor="end" font-size="11" style="fill:var(--muted)">${v * 100}%</text>`);
+  [-6, -3, 0, 3, 6].forEach(z => svg += `<text x="${X(z)}" y="${h - 12}" text-anchor="middle" font-size="11" style="fill:var(--muted)">${z}</text>`);
+  svg += `<path d="${path}" style="fill:none;stroke:var(--accent);stroke-width:2.5"/><line x1="${X(real)}" x2="${X(real)}" y1="${Y(0)}" y2="${Y(sig(real))}" style="stroke:var(--muted);stroke-dasharray:4 4"/><circle cx="${X(real)}" cy="${Y(sig(real))}" r="5" style="fill:var(--spam)"/>`;
+  if (Math.abs(st.explore - real) > 0.01) svg += `<circle cx="${X(st.explore)}" cy="${Y(p)}" r="5" style="fill:var(--ink)"/>`;
+  svg += `</svg>`;
+  return `<span class="eyebrow">Step 6 · Score → probability</span><h2>${pct(sig(real))} spam</h2>
+  <p>The sigmoid squeezes any score into a probability between 0 and 1. A score of 0 means 50%. Above 50%, the message counts as spam. The red dot is this message's real score.</p>
+  <div class="formula soft">1 ÷ (1 + e<sup>−${real.toFixed(4)}</sup>) = <b>${sig(real).toFixed(4)}</b><br>As a percentage: ${sig(real).toFixed(4)} × 100 = <b>${pct(sig(real), 2)}</b><br>Rounded to 1 decimal: <b>${pct(sig(real))}</b></div>
+  <div class="scroll">${svg}</div>
+  <div style="display:flex;flex-direction:column;gap:6px"><label class="lbl" for="sc">Try another score: ${st.explore.toFixed(2)} → <span style="color:${spam ? "var(--spam)" : "var(--ham)"}">${pct(p)} · ${spam ? "spam" : "ham"}</span></label>
+  <input type="range" id="sc" min="-6" max="6" step="0.01" value="${st.explore}"></div>`;
+}},
+{ name: "More messages", render(T) {
+  return `<span class="eyebrow">Step 7 · Your own examples</span><h2>Three messages, three verdicts</h2>
+  <p>New messages, written for this test, so the model has never seen them. The third one is tricky: it uses “won”, “prize” and “free”, yet reads like a normal message.</p>
+  <div class="examples">${D.my_examples.map(e => { const s = e.spam_probability > 0.5; return `<div class="ex"><div class="bubble">${esc(e.text)}</div>
+    <div class="controls"><span class="verdict ${s ? "spam" : "ham"}">${s ? "Spam" : "Ham"} · ${pct(e.spam_probability)}</span></div>
+    <div class="probbar" role="img" aria-label="${pct(e.spam_probability)} spam"><i style="width:${Math.max(1, e.spam_probability * 100).toFixed(1)}%;background:${s ? "var(--spam)" : "var(--ham)"}"></i></div></div>`; }).join("")}</div>`;
+}},
+{ name: "Results", render(T) {
+  const R = D.test_results, H = D.training_history, cm = R.confusion_matrix, tot = cm.true_negatives + cm.false_positives + cm.false_negatives + cm.true_positives;
+  const best = H.val_loss.indexOf(Math.min(...H.val_loss));
+  return `<span class="eyebrow">Step 8 · Training and test results</span><h2>How well it works</h2>
+  <p>BERT was fine-tuned for ${H.train_loss.length} epochs, and the version with the lowest validation loss was kept. It was then tested once on ${tot} messages it had never seen.</p>
+  <div class="tiles">
+    <div class="tile"><span class="n">${pct(R.accuracy, 2)}</span><span class="d">Test accuracy</span></div>
+    <div class="tile"><span class="n">${pct(R.spam_precision, 1)}</span><span class="d">Spam precision: no real message flagged</span></div>
+    <div class="tile"><span class="n">${pct(R.spam_recall, 1)}</span><span class="d">Spam recall: share of spam caught</span></div>
+    <div class="tile"><span class="n">${R.spam_f1.toFixed(3)}</span><span class="d">Spam F1 score</span></div>
+  </div>
+  <div class="two">
+  <div style="display:flex;flex-direction:column;gap:8px"><span class="lbl">Confusion matrix · test set</span>
+  <div class="cm"><div class="h"></div><div class="h">Predicted ham</div><div class="h">Predicted spam</div>
+  <div class="h" style="text-align:right">Actual ham</div><div class="good">${cm.true_negatives}<small>true negatives</small></div><div class="${cm.false_positives ? "bad" : "good"}">${cm.false_positives}<small>false positives</small></div>
+  <div class="h" style="text-align:right">Actual spam</div><div class="bad">${cm.false_negatives}<small>false negatives</small></div><div class="good">${cm.true_positives}<small>true positives</small></div></div></div>
+  <div style="display:flex;flex-direction:column;gap:8px;min-width:0"><span class="lbl">Training history</span>
+  <div class="scroll"><table><thead><tr><th>Epoch</th><th>Train loss</th><th>Val loss</th><th>Val acc.</th></tr></thead>
+  <tbody>${H.train_loss.map((v, e) => `<tr class="${e === best ? "row-total" : ""}"><td>${e + 1}${e === best ? " · kept" : ""}</td><td>${v.toFixed(4)}</td><td>${H.val_loss[e].toFixed(4)}</td><td>${pct(H.val_accuracy[e], 2)}</td></tr>`).join("")}</tbody></table></div></div></div>
+  <div class="note"><b>Why epoch ${best + 1} was kept.</b> It had the lowest validation loss (${H.val_loss[best].toFixed(4)}). In the following epochs, the training loss kept falling (${H.train_loss.slice(best + 1).map(v => v.toFixed(4)).join(", ")}) while the validation loss rose (${H.val_loss.slice(best + 1).map(v => v.toFixed(4)).join(", ")}): the model was starting to memorize its training messages, an early sign of overfitting. Validation accuracy still rose slightly, by a few messages, but loss also measures confidence: on the messages it got wrong, the later versions were more confidently wrong. So the lowest validation loss is the safer choice.</div>
+  <div class="note">For a spam filter, flagging a real message is the costly mistake. This model made none of those, and let ${cm.false_negatives} of ${cm.false_negatives + cm.true_positives} spam messages through.</div>`;
+}}
+];
+
+const rail = document.getElementById("rail"), panel = document.getElementById("panel");
+function draw() {
+  const T = D.tokens;
+  rail.innerHTML = steps.map((s, i) => `<button data-s="${i}" ${i === st.cur ? 'aria-current="step"' : ""}>${s.name}</button>`).join("");
+  panel.innerHTML = steps[st.cur].render(T);
+  document.getElementById("count").textContent = `${st.cur + 1} / ${steps.length}`;
+  document.getElementById("prev").disabled = st.cur === 0;
+  document.getElementById("next").disabled = st.cur === steps.length - 1;
+  try { localStorage.setItem("bert-walk-step", String(st.cur)); } catch (e) {}
+}
+rail.addEventListener("click", e => { const b = e.target.closest("[data-s]"); if (b && D) { st.cur = +b.dataset.s; draw(); } });
+document.getElementById("prev").onclick = () => { if (D && st.cur > 0) { st.cur--; draw(); } };
+document.getElementById("next").onclick = () => { if (D && st.cur < steps.length - 1) { st.cur++; draw(); } };
+panel.addEventListener("click", e => {
+  if (!D) return;
+  const t = e.target.closest("[data-go],[data-e],[data-i],[data-l],[data-h],[data-t],[data-n]"); if (!t) return;
+  const ds = t.dataset;
+  if (ds.go !== undefined) st.cur = +ds.go;
+  else if (ds.e !== undefined) st.embTok = +ds.e;
+  else if (ds.i !== undefined) {
+    const i = +ds.i;
+    if (steps[st.cur].name === "12 layers") { if (st.watch.has(i)) st.watch.delete(i); else if (st.watch.size < 6) st.watch.add(i); }
+    else { st.tok = i; st.target = null; }
+  }
+  else if (ds.l !== undefined) { st.layer = +ds.l; st.target = null; }
+  else if (ds.h !== undefined) { st.head = +ds.h; st.target = null; }
+  else if (ds.t !== undefined) st.target = +ds.t;
+  else if (ds.n !== undefined) st.neuron = +ds.n;
+  draw();
+});
+panel.addEventListener("input", e => { if (e.target.id === "sc") { st.explore = +e.target.value; draw(); const s = document.getElementById("sc"); if (s) s.focus(); } });
+
+fetch("data.json").then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }).then(data => {
+  D = data; const T = D.tokens;
+  st.tok = st.embTok = T.indexOf("win") >= 0 ? T.indexOf("win") : 1;
+  st.watch = new Set(["[CLS]", "win", "cash", "the"].map(t => T.indexOf(t)).filter(i => i >= 0));
+  st.explore = D.classifier.final_score;
+  try { const s = +localStorage.getItem("bert-walk-step"); if (s >= 0 && s < steps.length) st.cur = s; } catch (e) {}
+  draw();
+}).catch(() => { panel.innerHTML = `<p>The model's numbers couldn't be loaded. Reload the page to try again.</p>`; });
+</script>
+
+</body>
+</html>

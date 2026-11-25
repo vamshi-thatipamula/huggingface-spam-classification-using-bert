@@ -1,0 +1,19 @@
+# Trained model
+*.pt
+
+# Exported data for the interactive page
+bert_walkthrough_data.json
+
+# Datasets
+data/
+dataset/
+datasets/
+*.csv
+
+# Jupyter and Python temporary files
+.ipynb_checkpoints/
+__pycache__/
+
+# Mac and PyCharm settings
+.DS_Store
+.idea/
