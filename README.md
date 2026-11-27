@@ -1,5 +1,7 @@
 <h1 align="center">Hugging Face: SPAM Classification using BERT</h1>
 
+<p align="center"><i>BERT is an encoder-only Transformer: every word can look at all the other words, before and after it.</i></p>
+
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3776AB?style=for-the-badge" alt="Python">
   <img src="https://img.shields.io/badge/PyTorch-EE4C2C?style=for-the-badge" alt="PyTorch">
